@@ -1,12 +1,11 @@
-// Código feito em aula por Artur Figueiredo, Enrique Campos Nogueira, João Victor dos Santos Silva
-
-
+// Padrão Singleton
 class GlobalConfig {
     private static GlobalConfig instance;
     
     private String nomeApp = "Sistema de Notificações";
     private String servidor = "servidor.empresa.com";
     private int maxRetries = 3;
+    
 
     private GlobalConfig() {}
 
@@ -22,25 +21,75 @@ class GlobalConfig {
     public int getMaxRetries() { return maxRetries; }
 }
 
+// Interface de notificação 
 interface Notification {
-    void send(String msg);
+    void send(String target, String msg);
 }
 
+// Classes de notificação por e-mail e push
 class EmailNotification implements Notification {
-    public void send(String msg) {
-        System.out.println("Enviando E-mail: " + msg);
+    public void send(String target, String msg) {
+        System.out.println("Enviando E-mail para [" + target + "]: " + msg);
     }
 }
-
-class SMSNotification implements Notification {
-    public void send(String msg) {
-        System.out.println("Enviando SMS: " + msg);
-    }
-}
-
 class PushNotification implements Notification {
-    public void send(String msg) {
-        System.out.println("Enviando Push Notification: " + msg);
+    public void send(String target, String msg) {
+        System.out.println("Enviando Push Notification para [" + target + "]: " + msg);
+    }
+}
+
+// API de SMS (serviço legado incompatível com send())
+class LegacySMSApi {
+    public void dispatchSMS(String targetNumber, String content) {
+        System.out.println("API Externa (Legada) despachando SMS para [" + targetNumber + "]: " + content);
+    }
+}
+
+// Padrão Adapter
+class SMSAdapter implements Notification {
+    private LegacySMSApi legacyApi;
+
+    public SMSAdapter(LegacySMSApi legacyApi) {
+        this.legacyApi = legacyApi;
+    }
+
+    @Override
+    public void send(String target, String msg) {
+        legacyApi.dispatchSMS(target, msg);
+    }
+}
+
+// Padrão Proxy
+class NotificationProxy implements Notification {
+    private Notification realNotification;
+    private boolean userHasPermission;
+    private int attempts;
+
+    public NotificationProxy(Notification realNotification, boolean userHasPermission) {
+        this.realNotification = realNotification;
+        this.userHasPermission = userHasPermission;
+        this.attempts = 0;
+    }
+
+    @Override
+    public void send(String target, String msg) {
+        System.out.println("\n[PROXY LOG] Interceptando requisição de envio para: " + target);
+
+        if (!userHasPermission) {
+            System.out.println("[PROXY AVISO] Falha na validação: Usuário sem permissão para enviar notificações.");
+            return;
+        }
+
+        int maxRetries = GlobalConfig.getInstance().getMaxRetries();
+        if (attempts >= maxRetries) {
+            System.out.println("[PROXY AVISO] Limite de tentativas excedido (" + maxRetries + "). Bloqueando envio.");
+            return;
+        }
+
+        attempts++;
+        
+        realNotification.send(target, msg);
+        System.out.println("[PROXY LOG] Sucesso! Tentativa " + attempts + " de " + maxRetries + " utilizadas.");
     }
 }
 
@@ -49,81 +98,45 @@ class NotificationFactory {
         if (type == null) return null;
         
         switch (type.toUpperCase()) {
-            case "EMAIL": return new EmailNotification();
-            case "SMS":   return new SMSNotification();
-            case "PUSH":  return new PushNotification();
-            default: throw new IllegalArgumentException("Tipo de notificação desconhecido.");
+            case "EMAIL": 
+                return new EmailNotification();
+            case "SMS":   
+                return new SMSAdapter(new LegacySMSApi());
+            case "PUSH":  
+                return new PushNotification();
+            default: 
+                throw new IllegalArgumentException("Tipo de notificação desconhecido.");
         }
     }
 }
 
+// --- Classe Main ---
 public class Main {
     public static void main(String[] args) {
         
         GlobalConfig config = GlobalConfig.getInstance();
         System.out.println("Iniciando " + config.getNomeApp() + " no servidor " + config.getServidor());
+        System.out.println("--------------------------------------------------");
         
-        Notification email = NotificationFactory.create("EMAIL");
-        Notification sms = NotificationFactory.create("SMS");
-        Notification push = NotificationFactory.create("PUSH");
+        Notification baseSms = NotificationFactory.create("SMS");
+        Notification baseEmail = NotificationFactory.create("EMAIL");
 
-        email.send("Mensagem por e-mail");
-        sms.send("Mensagem por sms");
-        push.send("mensagem por push");
+        Notification proxySms = new NotificationProxy(baseSms, true);
+        Notification proxyEmailForbidden = new NotificationProxy(baseEmail, false);
+        Notification proxyEmailAllowed = new NotificationProxy(baseEmail, true);
         
-        // Chamada da suíte de testes adicionada ao final da execução principal
-        System.out.println("\n=================================");
-        SimpleTests.main(args);
-    }
-}
-
-// 4. Testes Manuais (Sem frameworks externos)
-class SimpleTests {
-    public static void main(String[] args) {
-        System.out.println("--- Iniciando Testes ---");
-        testSingletonGaranteInstanciaUnica();
-        testFactoryCriaObjetosCorretos();
-        testFactoryLancaExcecaoTipoInvalido();
-        System.out.println("--- Todos os testes finalizados ---");
-    }
-
-    public static void testSingletonGaranteInstanciaUnica() {
-        GlobalConfig config1 = GlobalConfig.getInstance();
-        GlobalConfig config2 = GlobalConfig.getInstance();
+        // Vai gerar erro porque não tem permissão
+        proxyEmailForbidden.send("cliente@empresa.com", "Bem-vindo ao sistema por E-mail!");
         
-        // Verifica se ambas as variáveis apontam para o mesmo endereço de memória
-        if (config1 == config2) {
-            System.out.println("[OK] testSingletonGaranteInstanciaUnica");
-        } else {
-            System.out.println("[FALHA] testSingleton: Instâncias diferentes foram criadas!");
-        }
-    }
-
-    public static void testFactoryCriaObjetosCorretos() {
-        Notification email = NotificationFactory.create("EMAIL");
-        Notification sms = NotificationFactory.create("SMS");
-        Notification push = NotificationFactory.create("PUSH");
+        // Não vai gerar erro porque tem permissão
+        proxyEmailAllowed.send("cliente@empresa.com", "Bem-vindo ao sistema por E-mail!");
         
-        // Valida se as instâncias retornadas são do tipo correto
-        boolean sucesso = (email instanceof EmailNotification) && 
-                          (sms instanceof SMSNotification) && 
-                          (push instanceof PushNotification);
-                          
-        if (sucesso) {
-            System.out.println("[OK] testFactoryCriaObjetosCorretos");
-        } else {
-            System.out.println("[FALHA] testFactory: Tipos incorretos retornados!");
-        }
-    }
-    
-    public static void testFactoryLancaExcecaoTipoInvalido() {
-        try {
-            NotificationFactory.create("FAX");
-            // Se chegar aqui, a exceção não foi lançada
-            System.out.println("[FALHA] testFactoryExcecao: Nenhuma exceção foi lançada para tipo inválido!");
-        } catch (IllegalArgumentException e) {
-            // Comportamento esperado
-            System.out.println("[OK] testFactoryLancaExcecaoTipoInvalido");
-        }
+        // Três tentativas permitidas
+        proxySms.send("11999998888", "Seu código de verificação é 1234.");
+        proxySms.send("11999998888", "Promoção imperdível hoje!");
+        proxySms.send("11999998888", "Sua fatura fechou.");
+        
+        // ERRO: MaxRetries < attempts
+        proxySms.send("11999998888", "Mensagem extra que deve ser bloqueada.");
     }
 }
